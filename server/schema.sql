@@ -2,6 +2,24 @@ PRAGMA foreign_keys = ON;
 
 CREATE TABLE IF NOT EXISTS products (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  name TEXT NOT NULL,
-  price REAL NOT NULL CHECK (price >= 0)
+  name TEXT NOT NULL UNIQUE
 );
+
+CREATE TABLE IF NOT EXISTS stores (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL UNIQUE
+);
+
+CREATE TABLE IF NOT EXISTS store_prices (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  product_id INTEGER NOT NULL,
+  store_id INTEGER NOT NULL,
+  price REAL NOT NULL CHECK (price >= 0),
+  last_updated TEXT DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE,
+  FOREIGN KEY (store_id) REFERENCES stores(id) ON DELETE CASCADE,
+  UNIQUE(product_id, store_id)
+);
+
+INSERT OR IGNORE INTO stores (name) VALUES ('Walmart');
+INSERT OR IGNORE INTO stores (name) VALUES ('Target');

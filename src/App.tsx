@@ -1,55 +1,111 @@
 import { useEffect, useMemo, useState } from "react";
 
-type Product = {
-  id: number;
-  name: string;
+type ComparisonRow = {
+  productId: number;
+  productName: string;
+  storeName: string;
   price: number;
+  lastUpdated: string;
+};
+
+type GroupedProduct = {
+  productId: number;
+  productName: string;
+  walmartPrice?: number;
+  targetPrice?: number;
 };
 
 export default function App() {
   const [budget, setBudget] = useState("");
   const [productName, setProductName] = useState("");
-  const [productPrice, setProductPrice] = useState("");
-  const [products, setProducts] = useState<Product[]>([]);
+  const [walmartPrice, setWalmartPrice] = useState("");
+  const [targetPrice, setTargetPrice] = useState("");
+  const [rows, setRows] = useState<ComparisonRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
-  const totalSpent = useMemo(() => {
-    return products.reduce((sum, product) => sum + product.price, 0);
-  }, [products]);
+  async function loadComparisons() {
+    try {
+      setLoading(true);
+      setError("");
 
-  const numericBudget = Number(budget) || 0;
-  const remaining = numericBudget - totalSpent;
+      const response = await fetch("/api/comparisons");
+      if (!response.ok) {
+        throw new Error("Failed to load comparisons.");
+      }
+
+      const data: ComparisonRow[] = await response.json();
+      setRows(data);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Something went wrong.");
+    } finally {
+      setLoading(false);
+    }
+  }
 
   useEffect(() => {
-    async function loadProducts() {
-      try {
-        setLoading(true);
-        setError("");
+    loadComparisons();
+  }, []);
 
-        const response = await fetch("/api/products");
-        if (!response.ok) {
-          throw new Error("Failed to load products.");
-        }
+  const groupedProducts = useMemo(() => {
+    const map = new Map<number, GroupedProduct>();
 
-        const data: Product[] = await response.json();
-        setProducts(data);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : "Something went wrong.");
-      } finally {
-        setLoading(false);
+    for (const row of rows) {
+      if (!map.has(row.productId)) {
+        map.set(row.productId, {
+          productId: row.productId,
+          productName: row.productName,
+        });
+      }
+
+      const product = map.get(row.productId)!;
+
+      if (row.storeName === "Walmart") {
+        product.walmartPrice = row.price;
+      }
+
+      if (row.storeName === "Target") {
+        product.targetPrice = row.price;
       }
     }
 
-    loadProducts();
-  }, []);
+    return Array.from(map.values());
+  }, [rows]);
 
-  async function addProduct() {
+  const cheapestTotal = useMemo(() => {
+    return groupedProducts.reduce((sum, product) => {
+      const prices = [product.walmartPrice, product.targetPrice].filter(
+        (price): price is number => typeof price === "number"
+      );
+
+      if (prices.length === 0) {
+        return sum;
+      }
+
+      return sum + Math.min(...prices);
+    }, 0);
+  }, [groupedProducts]);
+
+  const numericBudget = Number(budget) || 0;
+  const remaining = numericBudget - cheapestTotal;
+
+  async function addComparison() {
     const trimmedName = productName.trim();
-    const price = Number(productPrice);
+    const walmart = Number(walmartPrice);
+    const target = Number(targetPrice);
 
-    if (!trimmedName || Number.isNaN(price) || price < 0) {
-      setError("Enter a valid product name and price.");
+    if (!trimmedName) {
+      setError("Product name is required.");
+      return;
+    }
+
+    if (
+      Number.isNaN(walmart) ||
+      walmart < 0 ||
+      Number.isNaN(target) ||
+      target < 0
+    ) {
+      setError("Enter valid prices for Walmart and Target.");
       return;
     }
 
@@ -63,28 +119,29 @@ export default function App() {
         },
         body: JSON.stringify({
           name: trimmedName,
-          price,
+          walmartPrice: walmart,
+          targetPrice: target,
         }),
       });
 
       if (!response.ok) {
-        throw new Error("Failed to add product.");
+        throw new Error("Failed to save product comparison.");
       }
 
-      const newProduct: Product = await response.json();
-      setProducts((current) => [newProduct, ...current]);
       setProductName("");
-      setProductPrice("");
+      setWalmartPrice("");
+      setTargetPrice("");
+      await loadComparisons();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong.");
     }
   }
 
-  async function removeProduct(id: number) {
+  async function removeProduct(productId: number) {
     try {
       setError("");
 
-      const response = await fetch(`/api/products/${id}`, {
+      const response = await fetch(`/api/products/${productId}`, {
         method: "DELETE",
       });
 
@@ -92,7 +149,7 @@ export default function App() {
         throw new Error("Failed to remove product.");
       }
 
-      setProducts((current) => current.filter((product) => product.id !== id));
+      await loadComparisons();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong.");
     }
@@ -100,13 +157,13 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-100 px-4 py-10 text-slate-900">
-      <div className="mx-auto max-w-3xl rounded-2xl bg-white p-6 shadow-md">
+      <div className="mx-auto max-w-4xl rounded-2xl bg-white p-6 shadow-md">
         <h1 className="text-3xl font-bold">Budget Grocery</h1>
         <p className="mt-2 text-slate-600">
-          Enter a budget and save products to the database.
+          Compare Walmart and Target prices for your grocery list.
         </p>
 
-        <div className="mt-8 rounded-xl bg-slate-50 p-4">
+        <div className="mt-6 rounded-xl bg-slate-50 p-4">
           <label className="mb-2 block text-sm font-medium">Budget</label>
           <input
             type="number"
@@ -119,7 +176,7 @@ export default function App() {
           />
         </div>
 
-        <div className="mt-6 grid gap-4 rounded-xl bg-slate-50 p-4 md:grid-cols-2">
+        <div className="mt-6 grid gap-4 rounded-xl bg-slate-50 p-4 md:grid-cols-3">
           <div>
             <label className="mb-2 block text-sm font-medium">Product Name</label>
             <input
@@ -132,24 +189,37 @@ export default function App() {
           </div>
 
           <div>
-            <label className="mb-2 block text-sm font-medium">Product Price</label>
+            <label className="mb-2 block text-sm font-medium">Walmart Price</label>
             <input
               type="number"
               min="0"
               step="0.01"
-              value={productPrice}
-              onChange={(e) => setProductPrice(e.target.value)}
-              placeholder="3.99"
+              value={walmartPrice}
+              onChange={(e) => setWalmartPrice(e.target.value)}
+              placeholder="3.48"
               className="w-full rounded-lg border border-slate-300 px-3 py-2 outline-none focus:border-emerald-500"
             />
           </div>
 
-          <div className="md:col-span-2">
+          <div>
+            <label className="mb-2 block text-sm font-medium">Target Price</label>
+            <input
+              type="number"
+              min="0"
+              step="0.01"
+              value={targetPrice}
+              onChange={(e) => setTargetPrice(e.target.value)}
+              placeholder="3.79"
+              className="w-full rounded-lg border border-slate-300 px-3 py-2 outline-none focus:border-emerald-500"
+            />
+          </div>
+
+          <div className="md:col-span-3">
             <button
-              onClick={addProduct}
+              onClick={addComparison}
               className="w-full rounded-lg bg-emerald-600 px-4 py-2 font-semibold text-white transition hover:bg-emerald-700"
             >
-              Add Product
+              Save Comparison
             </button>
           </div>
         </div>
@@ -167,8 +237,8 @@ export default function App() {
           </div>
 
           <div className="rounded-xl bg-slate-50 p-4">
-            <p className="text-sm text-slate-500">Total Spent</p>
-            <p className="mt-1 text-2xl font-bold">${totalSpent.toFixed(2)}</p>
+            <p className="text-sm text-slate-500">Cheapest Total</p>
+            <p className="mt-1 text-2xl font-bold">${cheapestTotal.toFixed(2)}</p>
           </div>
 
           <div className="rounded-xl bg-slate-50 p-4">
@@ -184,34 +254,77 @@ export default function App() {
         </div>
 
         <div className="mt-8">
-          <h2 className="text-xl font-semibold">Products</h2>
+          <h2 className="text-xl font-semibold">Store Comparisons</h2>
 
           {loading ? (
-            <p className="mt-3 text-slate-500">Loading products...</p>
-          ) : products.length === 0 ? (
+            <p className="mt-3 text-slate-500">Loading comparisons...</p>
+          ) : groupedProducts.length === 0 ? (
             <p className="mt-3 text-slate-500">No products added yet.</p>
           ) : (
             <div className="mt-4 space-y-3">
-              {products.map((product) => (
-                <div
-                  key={product.id}
-                  className="flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50 px-4 py-3"
-                >
-                  <div>
-                    <p className="font-medium">{product.name}</p>
-                    <p className="text-sm text-slate-500">
-                      ${product.price.toFixed(2)}
-                    </p>
-                  </div>
+              {groupedProducts.map((product) => {
+                const walmart = product.walmartPrice;
+                const target = product.targetPrice;
+                const cheapestStore =
+                  typeof walmart === "number" && typeof target === "number"
+                    ? walmart < target
+                      ? "Walmart"
+                      : target < walmart
+                      ? "Target"
+                      : "Tie"
+                    : "Unknown";
 
-                  <button
-                    onClick={() => removeProduct(product.id)}
-                    className="rounded-lg bg-red-500 px-3 py-2 text-sm font-semibold text-white transition hover:bg-red-600"
+                return (
+                  <div
+                    key={product.productId}
+                    className="rounded-xl border border-slate-200 bg-slate-50 p-4"
                   >
-                    Remove
-                  </button>
-                </div>
-              ))}
+                    <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                      <div>
+                        <p className="text-lg font-semibold">{product.productName}</p>
+                        <p className="text-sm text-slate-500">
+                          Cheapest option: {cheapestStore}
+                        </p>
+                      </div>
+
+                      <button
+                        onClick={() => removeProduct(product.productId)}
+                        className="rounded-lg bg-red-500 px-3 py-2 text-sm font-semibold text-white transition hover:bg-red-600"
+                      >
+                        Remove
+                      </button>
+                    </div>
+
+                    <div className="mt-4 grid gap-3 md:grid-cols-2">
+                      <div
+                        className={`rounded-lg p-3 ${
+                          cheapestStore === "Walmart"
+                            ? "bg-emerald-100"
+                            : "bg-white"
+                        }`}
+                      >
+                        <p className="text-sm text-slate-500">Walmart</p>
+                        <p className="text-xl font-bold">
+                          ${typeof walmart === "number" ? walmart.toFixed(2) : "--"}
+                        </p>
+                      </div>
+
+                      <div
+                        className={`rounded-lg p-3 ${
+                          cheapestStore === "Target"
+                            ? "bg-emerald-100"
+                            : "bg-white"
+                        }`}
+                      >
+                        <p className="text-sm text-slate-500">Target</p>
+                        <p className="text-xl font-bold">
+                          ${typeof target === "number" ? target.toFixed(2) : "--"}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>
