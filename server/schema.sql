@@ -1,5 +1,10 @@
 PRAGMA foreign_keys = ON;
 
+CREATE TABLE IF NOT EXISTS budgets (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  amount REAL NOT NULL CHECK (amount >= 0)
+);
+
 CREATE TABLE IF NOT EXISTS products (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL UNIQUE
@@ -21,5 +26,6 @@ CREATE TABLE IF NOT EXISTS store_prices (
   UNIQUE(product_id, store_id)
 );
 
+INSERT OR IGNORE INTO budgets (id, amount) VALUES (1, 0);
 INSERT OR IGNORE INTO stores (name) VALUES ('Walmart');
 INSERT OR IGNORE INTO stores (name) VALUES ('Target');

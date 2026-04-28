@@ -232,6 +232,34 @@ app.delete("/api/products/:id", (req, res): void => {
   res.status(204).send();
 });
 
+app.get("/api/budget", (_req, res) => {
+  const budget = db
+    .prepare("SELECT id, amount FROM budgets WHERE id = 1")
+    .get() as { id: number; amount: number } | undefined;
+
+  res.json(budget ?? { id: 1, amount: 0 });
+});
+
+app.put("/api/budget", (req, res) => {
+  const { amount } = req.body as { amount?: number };
+
+  if (typeof amount !== "number" || Number.isNaN(amount) || amount < 0) {
+    return res.status(400).json({ error: "Valid budget amount is required." });
+  }
+
+  db.prepare(`
+    INSERT INTO budgets (id, amount)
+    VALUES (1, ?)
+    ON CONFLICT(id) DO UPDATE SET amount = excluded.amount
+  `).run(amount);
+
+  const updatedBudget = db
+    .prepare("SELECT id, amount FROM budgets WHERE id = 1")
+    .get() as { id: number; amount: number };
+
+  res.json(updatedBudget);
+});
+
 app.listen(3000, () => {
   console.log("API running on http://localhost:3000");
 });
