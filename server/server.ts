@@ -19,51 +19,31 @@ const schemaPath = path.join(__dirname, "schema.sql");
 const schema = fs.readFileSync(schemaPath, "utf-8");
 db.exec(schema);
 
-type ProductCount = { count: number };
-type StoreRow = { id: number; name: string };
-type ProductRow = { id: number; name: string };
-type ComparisonRow = {
-  productId: number;
-  productName: string;
-  storeName: string;
-  price: number;
-  lastUpdated: string;
-};
+const productCount = db
+  .prepare("SELECT COUNT(*) as count FROM products")
+  .get() as { count: number };
 
-type BasketItem = {
-  productId: number;
-  quantity: number;
-};
-
-function seedSampleProducts() {
-  const productCount = db
-    .prepare("SELECT COUNT(*) as count FROM products")
-    .get() as ProductCount;
-
-  if (productCount.count > 0) {
-    return;
-  }
-
+if (productCount.count === 0) {
   const sampleProducts = [
-    { name: "Milk", walmart: 3.48, target: 3.29 },
+    { name: "Milk", walmart: 3.48, target: 3.79 },
     { name: "Eggs", walmart: 2.99, target: 3.19 },
-    { name: "Bread", walmart: 2.49, target: 2.29 },
+    { name: "Bread", walmart: 2.49, target: 2.69 },
     { name: "Rice", walmart: 5.99, target: 6.49 },
-    { name: "Chicken", walmart: 8.99, target: 8.79 },
+    { name: "Chicken", walmart: 8.99, target: 9.49 },
     { name: "Apples", walmart: 4.29, target: 4.59 },
-    { name: "Bananas", walmart: 1.29, target: 1.19 },
+    { name: "Bananas", walmart: 1.29, target: 1.39 },
     { name: "Cereal", walmart: 3.99, target: 4.29 },
     { name: "Pasta", walmart: 1.99, target: 2.19 },
     { name: "Cheese", walmart: 4.49, target: 4.79 },
   ];
 
   const walmart = db
-    .prepare("SELECT id, name FROM stores WHERE name = 'Walmart'")
-    .get() as StoreRow | undefined;
+    .prepare("SELECT id FROM stores WHERE name = 'Walmart'")
+    .get() as { id: number } | undefined;
 
   const target = db
-    .prepare("SELECT id, name FROM stores WHERE name = 'Target'")
-    .get() as StoreRow | undefined;
+    .prepare("SELECT id FROM stores WHERE name = 'Target'")
+    .get() as { id: number } | undefined;
 
   if (!walmart || !target) {
     throw new Error("Walmart or Target not found in stores table.");
@@ -73,7 +53,9 @@ function seedSampleProducts() {
     "INSERT OR IGNORE INTO products (name) VALUES (?)"
   );
 
-  const getProduct = db.prepare("SELECT id, name FROM products WHERE name = ?");
+  const getProduct = db.prepare(
+    "SELECT id FROM products WHERE name = ?"
+  );
 
   const upsertPrice = db.prepare(`
     INSERT INTO store_prices (product_id, store_id, price)
@@ -87,7 +69,7 @@ function seedSampleProducts() {
   for (const item of sampleProducts) {
     insertProduct.run(item.name);
 
-    const product = getProduct.get(item.name) as ProductRow | undefined;
+    const product = getProduct.get(item.name) as { id: number } | undefined;
 
     if (!product) {
       throw new Error(`Failed to insert or find product: ${item.name}`);
@@ -99,119 +81,6 @@ function seedSampleProducts() {
 
   console.log("Sample products inserted");
 }
-
-function getComparisons(): ComparisonRow[] {
-  return db
-    .prepare(
-      `
-      SELECT
-        p.id AS productId,
-        p.name AS productName,
-        s.name AS storeName,
-        sp.price AS price,
-        sp.last_updated AS lastUpdated
-      FROM store_prices sp
-      JOIN products p ON sp.product_id = p.id
-      JOIN stores s ON sp.store_id = s.id
-      ORDER BY p.name, s.name
-      `
-    )
-    .all() as ComparisonRow[];
-}
-
-function optimizeBasket(items?: BasketItem[]) {
-  const comparisons = getComparisons();
-  const quantityMap = new Map<number, number>();
-
-  if (items && items.length > 0) {
-    for (const item of items) {
-      if (
-        typeof item.productId === "number" &&
-        typeof item.quantity === "number" &&
-        item.quantity > 0
-      ) {
-        quantityMap.set(item.productId, item.quantity);
-      }
-    }
-  }
-
-  const productMap = new Map<
-    number,
-    {
-      productId: number;
-      productName: string;
-      quantity: number;
-      prices: { storeName: string; price: number }[];
-    }
-  >();
-
-  for (const row of comparisons) {
-    const quantity = quantityMap.get(row.productId) ?? 1;
-
-    if (!productMap.has(row.productId)) {
-      productMap.set(row.productId, {
-        productId: row.productId,
-        productName: row.productName,
-        quantity,
-        prices: [],
-      });
-    }
-
-    productMap.get(row.productId)!.prices.push({
-      storeName: row.storeName,
-      price: row.price,
-    });
-  }
-
-  const itemsResult = Array.from(productMap.values()).map((product) => {
-    const cheapest = product.prices.reduce((best, current) =>
-      current.price < best.price ? current : best
-    );
-
-    return {
-      productId: product.productId,
-      productName: product.productName,
-      quantity: product.quantity,
-      cheapestStore: cheapest.storeName,
-      cheapestPrice: cheapest.price,
-      lineTotal: cheapest.price * product.quantity,
-      prices: product.prices,
-    };
-  });
-
-  const cheapestTotal = itemsResult.reduce((sum, item) => sum + item.lineTotal, 0);
-
-  const storeTotals = new Map<string, number>();
-  for (const item of itemsResult) {
-    for (const price of item.prices) {
-      storeTotals.set(
-        price.storeName,
-        (storeTotals.get(price.storeName) ?? 0) + price.price * item.quantity
-      );
-    }
-  }
-
-  const storeComparison = Array.from(storeTotals.entries())
-    .map(([storeName, total]) => ({ storeName, total }))
-    .sort((a, b) => a.total - b.total);
-
-  const bestSingleStore = storeComparison[0] ?? null;
-  const savingsVsBestSingleStore = bestSingleStore
-    ? bestSingleStore.total - cheapestTotal
-    : 0;
-
-  return {
-    cheapestTotal,
-    itemCount: itemsResult.length,
-    totalUnits: itemsResult.reduce((sum, item) => sum + item.quantity, 0),
-    bestSingleStore,
-    savingsVsBestSingleStore,
-    storeComparison,
-    items: itemsResult,
-  };
-}
-
-seedSampleProducts();
 
 app.get("/api/health", (_req, res) => {
   res.json({ status: "ok" });
@@ -239,37 +108,24 @@ app.get("/api/products", (_req, res) => {
 });
 
 app.get("/api/comparisons", (_req, res) => {
-  res.json(getComparisons());
-});
+  const comparisons = db
+    .prepare(
+      `
+      SELECT
+        p.id AS productId,
+        p.name AS productName,
+        s.name AS storeName,
+        sp.price AS price,
+        sp.last_updated AS lastUpdated
+      FROM store_prices sp
+      JOIN products p ON sp.product_id = p.id
+      JOIN stores s ON sp.store_id = s.id
+      ORDER BY p.name, s.name
+      `
+    )
+    .all();
 
-app.get("/api/summary", (_req, res) => {
-  const comparisons = getComparisons();
-  const productIds = new Set(comparisons.map((row) => row.productId));
-  const stores = new Set(comparisons.map((row) => row.storeName));
-  const optimized = optimizeBasket();
-
-  res.json({
-    productCount: productIds.size,
-    storeCount: stores.size,
-    cheapestTotal: optimized.cheapestTotal,
-    bestSingleStore: optimized.bestSingleStore,
-    savingsVsBestSingleStore: optimized.savingsVsBestSingleStore,
-  });
-});
-
-app.get("/api/basket/optimize", (_req, res) => {
-  res.json(optimizeBasket());
-});
-
-app.post("/api/basket/optimize", (req, res): void => {
-  const { items } = req.body as { items?: BasketItem[] };
-
-  if (items !== undefined && !Array.isArray(items)) {
-    res.status(400).json({ error: "Items must be an array." });
-    return;
-  }
-
-  res.json(optimizeBasket(items));
+  res.json(comparisons);
 });
 
 app.post("/api/products", (req, res): void => {
@@ -304,7 +160,7 @@ app.post("/api/products", (req, res): void => {
 
   const product = db
     .prepare("SELECT id, name FROM products WHERE name = ?")
-    .get(cleanName) as ProductRow | undefined;
+    .get(cleanName) as { id: number; name: string } | undefined;
 
   if (!product) {
     res.status(500).json({ error: "Failed to create product." });
@@ -312,12 +168,12 @@ app.post("/api/products", (req, res): void => {
   }
 
   const walmart = db
-    .prepare("SELECT id, name FROM stores WHERE name = 'Walmart'")
-    .get() as StoreRow | undefined;
+    .prepare("SELECT id FROM stores WHERE name = 'Walmart'")
+    .get() as { id: number } | undefined;
 
   const target = db
-    .prepare("SELECT id, name FROM stores WHERE name = 'Target'")
-    .get() as StoreRow | undefined;
+    .prepare("SELECT id FROM stores WHERE name = 'Target'")
+    .get() as { id: number } | undefined;
 
   if (!walmart || !target) {
     res.status(500).json({ error: "Required stores not found." });
@@ -401,6 +257,147 @@ app.put("/api/budget", (req, res) => {
     .get() as { id: number; amount: number };
 
   res.json(updatedBudget);
+});
+
+type BasketItem = {
+  productId: number;
+  quantity: number;
+};
+
+function getComparisons() {
+  return db
+    .prepare(
+      `
+      SELECT
+        p.id AS productId,
+        p.name AS productName,
+        s.name AS storeName,
+        sp.price AS price,
+        sp.last_updated AS lastUpdated
+      FROM store_prices sp
+      JOIN products p ON sp.product_id = p.id
+      JOIN stores s ON sp.store_id = s.id
+      ORDER BY p.name, s.name
+      `
+    )
+    .all();
+}
+
+function optimizeBasket(items?: BasketItem[]) {
+  const comparisons = getComparisons() as {
+    productId: number;
+    productName: string;
+    storeName: string;
+    price: number;
+    lastUpdated: string;
+  }[];
+
+  const quantityMap = new Map<number, number>();
+
+  if (items && items.length > 0) {
+    for (const item of items) {
+      if (
+        typeof item.productId === "number" &&
+        typeof item.quantity === "number" &&
+        item.quantity > 0
+      ) {
+        quantityMap.set(item.productId, item.quantity);
+      }
+    }
+  }
+
+  const productMap = new Map<
+    number,
+    {
+      productId: number;
+      productName: string;
+      quantity: number;
+      prices: { storeName: string; price: number }[];
+    }
+  >();
+
+  for (const row of comparisons) {
+    const quantity = quantityMap.get(row.productId) ?? 1;
+
+    if (!productMap.has(row.productId)) {
+      productMap.set(row.productId, {
+        productId: row.productId,
+        productName: row.productName,
+        quantity,
+        prices: [],
+      });
+    }
+
+    productMap.get(row.productId)!.prices.push({
+      storeName: row.storeName,
+      price: row.price,
+    });
+  }
+
+  const itemsResult = Array.from(productMap.values()).map((product) => {
+    const cheapest = product.prices.reduce((best, current) =>
+      current.price < best.price ? current : best
+    );
+
+    return {
+      productId: product.productId,
+      productName: product.productName,
+      quantity: product.quantity,
+      cheapestStore: cheapest.storeName,
+      cheapestPrice: cheapest.price,
+      lineTotal: cheapest.price * product.quantity,
+      prices: product.prices,
+    };
+  });
+
+  const cheapestTotal = itemsResult.reduce(
+    (sum, item) => sum + item.lineTotal,
+    0
+  );
+
+  const storeTotals = new Map<string, number>();
+
+  for (const item of itemsResult) {
+    for (const price of item.prices) {
+      storeTotals.set(
+        price.storeName,
+        (storeTotals.get(price.storeName) ?? 0) + price.price * item.quantity
+      );
+    }
+  }
+
+  const storeComparison = Array.from(storeTotals.entries())
+    .map(([storeName, total]) => ({ storeName, total }))
+    .sort((a, b) => a.total - b.total);
+
+  const bestSingleStore = storeComparison[0] ?? null;
+
+  return {
+    cheapestTotal,
+    itemCount: itemsResult.length,
+    totalUnits: itemsResult.reduce((sum, item) => sum + item.quantity, 0),
+    bestSingleStore,
+    savingsVsBestSingleStore: bestSingleStore
+      ? bestSingleStore.total - cheapestTotal
+      : 0,
+    storeComparison,
+    items: itemsResult,
+  };
+}
+
+app.get("/api/basket/optimize", (_req, res) => {
+  res.json(optimizeBasket());
+});
+
+app.post("/api/basket/optimize", (req, res): void => {
+  const { items } = req.body as { items?: BasketItem[] };
+
+  if (items !== undefined && !Array.isArray(items)) {
+    res.status(400).json({ error: "Items must be an array." });
+    return;
+  }
+
+  res.json(optimizeBasket(items));
 });
 
 app.listen(3000, () => {

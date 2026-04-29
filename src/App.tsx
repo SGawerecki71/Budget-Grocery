@@ -222,7 +222,7 @@ export default function App() {
       setWalmartPrice("");
       setTargetPrice("");
       setSuccess("Product comparison saved.");
-      await loadComparisons();
+      await loadData();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong.");
     } finally {
@@ -244,10 +244,43 @@ export default function App() {
       }
 
       setSuccess("Product removed.");
-      await loadComparisons();
+      await loadData();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong.");
     }
+  }
+
+  async function saveBudget() {
+  const amount = Number(budget);
+
+  if (Number.isNaN(amount) || amount < 0) {
+    setError("Enter a valid budget.");
+    return;
+  }
+
+  try {
+    setError("");
+    setSuccess("");
+
+    const response = await fetch("/api/budget", {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ amount }),
+    });
+
+    if (!response.ok) {
+      throw new Error("Failed to save budget.");
+    }
+
+    const updatedBudget = await response.json();
+
+    setBudget(String(updatedBudget.amount));
+    setSuccess("Budget saved.");
+  } catch (err) {
+    setError(err instanceof Error ? err.message : "Something went wrong.");
+  }
   }
 
   return (
@@ -267,14 +300,24 @@ export default function App() {
         <section className="mt-6 grid gap-4 md:grid-cols-4">
           <div className="rounded-2xl bg-white p-5 shadow-sm">
             <p className="text-sm text-slate-500">Budget</p>
-            <input
-              type="number"
-              min="0"
-              step="0.01"
-              value={budget}
-              onChange={(e) => setBudget(e.target.value)}
-              className="mt-2 w-full rounded-xl border border-slate-200 px-3 py-2 text-2xl font-bold outline-none focus:border-emerald-500"
-            />
+
+            <div className="mt-2 flex gap-2">
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                value={budget}
+                onChange={(e) => setBudget(e.target.value)}
+                className="w-full rounded-xl border border-slate-200 px-3 py-2 text-2xl font-bold outline-none focus:border-emerald-500"
+              />
+
+              <button
+                onClick={saveBudget}
+                className="rounded-xl bg-emerald-600 px-4 py-2 font-semibold text-white hover:bg-emerald-700"
+              >
+                Save
+              </button>
+            </div>
           </div>
 
           <div className="rounded-2xl bg-white p-5 shadow-sm">
